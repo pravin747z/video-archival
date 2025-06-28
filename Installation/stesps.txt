@@ -1,0 +1,14 @@
+1--> no cookies
+
+yt-dlp https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+
+
+2--> downloadin a playlist
+
+yt-dlp -o "%(playlist_title)s/%(title)s.%(ext)s" https://www.youtube.com/playlist?list=PLN0WDccbRPrp-zHwrN61nQFScHhWCk_OG
+
+
+3--> community / private video
+
+yt-dlp --cookies cookies.txt -o "%(playlist_title)s/%(title)s.%(ext)s" https://www.youtube.com/playlist?list=PLAkmEquH84Dt53mnvTDhPwdqOQm0FsUug
