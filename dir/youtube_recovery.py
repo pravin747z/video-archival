@@ -92,7 +92,7 @@ class YouTubeRecovery:
             return None, 0
             
     def download_playlist(self, playlist_url, playlist_name, video_count):
-        """Download a single playlist using yt-dlp"""
+        """Download a single playlist using yt-dlp with advanced fault tolerance"""
         try:
             # Sanitize playlist name for folder
             safe_playlist_name = self.sanitize_filename(playlist_name)
@@ -101,7 +101,7 @@ class YouTubeRecovery:
             print(f"Creating folder: downloads/{safe_playlist_name}/")
             playlist_folder.mkdir(exist_ok=True)
             
-            # yt-dlp command optimized for MAXIMUM video quality
+            # yt-dlp command optimized for MAXIMUM video quality with enhanced error handling
             cmd = [
                 'yt-dlp',
                 '-v',
@@ -110,40 +110,65 @@ class YouTubeRecovery:
                 '--output', str(playlist_folder / '%(title)s.%(ext)s'),
                 '--no-overwrites',
                 '--continue',
-                '--ignore-errors',
+                '--ignore-errors',  # Skip individual video errors, continue with playlist
+                '--no-abort-on-error',  # Don't abort entire playlist on single video failure
                 '--merge-output-format', 'mp4',
+                '--socket-timeout', '30',  # Individual video timeout
+                '--retries', '3',  # Retry failed videos 3 times
+                '--fragment-retries', '5',  # Retry failed fragments
                 playlist_url
             ]
             
-            print(f"Downloading videos... ", end='', flush=True)
+            print(f"Downloading videos (45min timeout)... ", end='', flush=True)
             
-            # Run with timeout (20 minutes = 1200 seconds)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+            # Run with extended timeout (45 minutes = 2700 seconds)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2700)
             
-            if result.returncode == 0:
-                print("[████████████████████████████████████████] 100%")
+            # Check if at least some videos were downloaded successfully
+            downloaded_files = list(playlist_folder.glob('*.mp4'))
+            
+            if len(downloaded_files) > 0:
+                success_rate = (len(downloaded_files) / video_count) * 100 if video_count > 0 else 0
+                print(f"[████████████████████████████████████████] {success_rate:.1f}% ({len(downloaded_files)}/{video_count})")
+                
+                # Log any skipped videos for transparency
+                if len(downloaded_files) < video_count:
+                    skipped_count = video_count - len(downloaded_files)
+                    print(f"⚠️  {skipped_count} videos skipped due to individual errors")
+                
                 return True
             else:
-                print("[✗] Failed")
-                print(f"Error: {result.stderr}")
+                print("[✗] No videos downloaded")
+                if result.stderr:
+                    print(f"Error details: {result.stderr[:200]}...")  # Truncate long errors
                 return False
                 
         except subprocess.TimeoutExpired:
-            print("[✗] Timeout (>20 minutes)")
-            print("⚠️  Playlist download timeout (20+ minutes) - Terminating and skipping...")
+            print("[✗] Timeout (>45 minutes)")
+            print("⚠️  Playlist download timeout (45+ minutes) - Checking partial success...")
+            
+            # Even on timeout, check if some videos were downloaded
+            downloaded_files = list(playlist_folder.glob('*.mp4'))
+            if len(downloaded_files) > 0:
+                print(f"✓ Partial success: {len(downloaded_files)} videos downloaded before timeout")
+                return True
             return False
+            
         except Exception as e:
             print(f"[✗] Error: {e}")
             return False
             
-    def log_result(self, playlist_name, success, url=""):
-        """Log the result of playlist download"""
+    def log_result(self, playlist_name, success, url="", additional_info=""):
+        """Log the result of playlist download with enhanced details"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status = "✓ Playlist downloaded" if success else "✗ Playlist was not able to download"
         
-        # Write to log file
+        # Write to log file with additional details
         with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(f"{status} - {playlist_name}\n")
+            log_entry = f"{status} - {playlist_name}"
+            if additional_info:
+                log_entry += f" ({additional_info})"
+            f.write(f"{log_entry}\n")
             
         if success:
             self.success_count += 1
@@ -172,13 +197,28 @@ class YouTubeRecovery:
             if playlist_name:
                 print(f'Playlist: "{playlist_name}" ({video_count} videos)')
                 
-                # Download playlist
+                # Download playlist with advanced error handling
                 success = self.download_playlist(playlist_url, playlist_name, video_count)
                 
-                # Log result
-                status_msg = "✓ Playlist downloaded" if success else "✗ Playlist was not able to download"
+                # Get actual download statistics for logging
+                if success:
+                    safe_playlist_name = self.sanitize_filename(playlist_name)
+                    playlist_folder = self.downloads_dir / safe_playlist_name
+                    downloaded_files = list(playlist_folder.glob('*.mp4')) if playlist_folder.exists() else []
+                    actual_count = len(downloaded_files)
+                    
+                    if actual_count == video_count:
+                        status_msg = "✓ Playlist downloaded (100% complete)"
+                        log_info = f"{actual_count}/{video_count} videos"
+                    else:
+                        status_msg = f"✓ Playlist downloaded ({actual_count}/{video_count} videos)"
+                        log_info = f"{actual_count}/{video_count} videos, {video_count - actual_count} skipped"
+                else:
+                    status_msg = "✗ Playlist was not able to download"
+                    log_info = "complete failure"
+                
                 print(status_msg)
-                self.log_result(playlist_name, success, playlist_url)
+                self.log_result(playlist_name, success, playlist_url, log_info)
                 
             else:
                 print("✗ Could not get playlist info")
